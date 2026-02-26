@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TMNT Pizza Collection - Michelangelo</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { display: flex; justify-content: center; align-items: center; min-height: 100vh; background: linear-gradient(135deg, #1a472a 0%, #2d5a3d 100%); font-family: 'Arial', sans-serif; }
+        #gameContainer { position: relative; width: 800px; height: 600px; background: linear-gradient(to bottom, #87CEEB 0%, #E0F6FF 100%); border: 4px solid #FF6B35; box-shadow: 0 0 20px rgba(0, 0, 0, 0.5); overflow: hidden; }
+        #gameCanvas { display: block; width: 100%; height: 100%; }
+        #ui { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; color: #333; font-weight: bold; font-size: 18px; z-index: 10; }
+        .ui-item { background: rgba(255, 255, 255, 0.9); padding: 10px 20px; border-radius: 8px; border: 2px solid #FF6B35; }
+        #winScreen { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.95); padding: 40px; border-radius: 20px; text-align: center; z-index: 100; color: #FFD700; font-size: 36px; font-weight: bold; border: 4px solid #FF6B35; }
+        #gameOverScreen { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.95); padding: 40px; border-radius: 20px; text-align: center; z-index: 100; color: #FF6B35; font-size: 36px; font-weight: bold; border: 4px solid #FF6B35; }
+        #secretScreen { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.95); z-index: 200; }
+        #secretScreen.active { display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        #secretText { color: #FFD700; font-size: 48px; font-weight: bold; margin-top: 30px; animation: floatUp 3s ease-out; }
+        @keyframes floatUp { 0% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-100px); } }
+        .restart-btn { margin-top: 20px; padding: 10px 20px; font-size: 18px; background: #FF6B35; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <div class="ui-item">Slices: <span id="sliceCount">0</span>/8</div>
+            <div class="ui-item">Time: <span id="timer">30</span>s</div>
+        </div>
+        <div id="winScreen">
+            <p>🐢 YOU WIN! 🐢</p>
+            <p style="font-size: 24px; margin-top: 20px;">Collected 8 Slices!</p>
+            <p style="font-size: 18px; margin-top: 20px;">Keep collecting for a secret ending...</p>
+        </div>
+        <div id="gameOverScreen">
+            <p>⏰ TIME'S UP!</p>
+            <p style="font-size: 24px;">Slices Collected: <span id="finalSlices">0</span></p>
+            <button class="restart-btn" onclick="location.reload()">Play Again</button>
+        </div>
+        <div id="secretScreen">
+            <canvas id="secretCanvas"></canvas>
+            <div id="secretText">SHREDDER DEFEATED! 🍕</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 800;
+        canvas.height = 600;
+
+        const GAME_STATE = { PLAYING: 0, WON: 1, GAME_OVER: 2, SECRET_ENDING: 3 };
+        let gameState = GAME_STATE.PLAYING;
+        let timeLeft = 30;
+        let slicesCollected = 0;
+        let pizzaSlices = [];
+        let enemies = [];
+        let gameStartTime = Date.now();
+
+        const player = { x: 400, y: 500, width: 40, height: 50, speed: 5 };
+        const keys = {};
+
+        class PizzaSlice {
+            constructor(x, y) { this.x = x; this.y = y; this.width = 30; this.height = 30; this.collected = false; }
+            draw(ctx) {
+                if (this.collected) return;
+                ctx.fillStyle = '#FF6B35';
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(this.x + this.width, this.y);
+                ctx.lineTo(this.x + this.width / 2, this.y + this.height);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#FFD700';
+                ctx.fillRect(this.x + 8, this.y + 8, 6, 6);
+                ctx.fillRect(this.x + 18, this.y + 12, 6, 6);
+            }
+            checkCollision(player) {
+                return player.x < this.x + this.width && player.x + player.width > this.x && player.y < this.y + this.height && player.y + player.height > this.y;
+            }
+        }
+
+        class Enemy {
+            constructor(x, y, name) {
+                this.x = x; this.y = y; this.width = 35; this.height = 35; this.name = name;
+                this.speedX = Math.random() * 2 - 1; this.speedY = Math.random() * 2 - 1;
+                this.color = { 'Bebop': '#8B4513', 'Rocksteady': '#696969', 'Fishface': '#4169E1', 'Dogpound': '#A0522D' }[name] || '#666';
+            }
+            update() {
+                this.x += this.speedX; this.y += this.speedY;
+                if (this.x < 0 || this.x + this.width > canvas.width) this.speedX *= -1;
+                if (this.y < 0 || this.y + this.height > canvas.height - 100) this.speedY *= -1;
+            }
+            draw(ctx) {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x + this.width / 2, this.y + this.height / 2, this.width / 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'white';
+                ctx.beginPath();
+                ctx.arc(this.x + 10, this.y + 10, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(this.x + 20, this.y + 10, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            checkCollision(player) {
+                return player.x < this.x + this.width && player.x + player.width > this.x && player.y < this.y + this.height && player.y + player.height > this.y;
+            }
+        }
+
+        function initializePizzaSlices() {
+            pizzaSlices = [
+                new PizzaSlice(100, 100), new PizzaSlice(300, 80), new PizzaSlice(600, 120),
+                new PizzaSlice(150, 250), new PizzaSlice(500, 280), new PizzaSlice(700, 200),
+                new PizzaSlice(250, 400), new PizzaSlice(650, 380), new PizzaSlice(75, 500),
+                new PizzaSlice(400, 450), new PizzaSlice(750, 450), new PizzaSlice(200, 150),
+                new PizzaSlice(550, 100), new PizzaSlice(350, 300), new PizzaSlice(725, 300)
+            ];
+        }
+
+        function initializeEnemies() {
+            enemies = [
+                new Enemy(150, 200, 'Bebop'), new Enemy(600, 150, 'Rocksteady'),
+                new Enemy(400, 350, 'Fishface'), new Enemy(200, 450, 'Dogpound')
+            ];
+        }
+
+        function drawPlayer() {
+            ctx.fillStyle = '#4CAF50';
+            ctx.beginPath();
+            ctx.arc(player.x + player.width / 2, player.y + 10, 10, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#2196F3';
+            ctx.fillRect(player.x + 3, player.y + 3, player.width - 6, 8);
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(player.x + 8, player.y + 6, 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(player.x + player.width - 8, player.y + 6, 2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(player.x, player.y + 15, player.width, 25);
+            ctx.fillStyle = '#8B4513';
+            ctx.beginPath();
+            ctx.ellipse(player.x + player.width / 2, player.y + 25, 15, 12, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(player.x + 5, player.y + 40, 8, 10);
+            ctx.fillRect(player.x + player.width - 13, player.y + 40, 8, 10);
+        }
+
+        function updatePlayer() {
+            if (keys['ArrowLeft'] && player.x > 0) player.x -= player.speed;
+            if (keys['ArrowRight'] && player.x + player.width < canvas.width) player.x += player.speed;
+            if (keys['ArrowUp'] && player.y > 0) player.y -= player.speed;
+            if (keys['ArrowDown'] && player.y + player.height < canvas.height) player.y += player.speed;
+        }
+
+        function checkPizzaCollision() {
+            for (let slice of pizzaSlices) {
+                if (!slice.collected && slice.checkCollision(player)) {
+                    slice.collected = true;
+                    slicesCollected++;
+                    document.getElementById('sliceCount').textContent = slicesCollected;
+                    if (slicesCollected === 8 && gameState === GAME_STATE.PLAYING) {
+                        gameState = GAME_STATE.WON;
+                        document.getElementById('winScreen').style.display = 'block';
+                    }
+                    if (slicesCollected === 15) {
+                        gameState = GAME_STATE.SECRET_ENDING;
+                    }
+                }
+            }
+        }
+
+        function checkEnemyCollision() {
+            for (let enemy of enemies) {
+                if (enemy.checkCollision(player) && gameState === GAME_STATE.PLAYING) {
+                    endGame();
+                    return;
+                }
+            }
+        }
+
+        function updateTimer() {
+            const elapsed = Math.floor((Date.now() - gameStartTime) / 1000);
+            timeLeft = Math.max(0, 30 - elapsed);
+            document.getElementById('timer').textContent = timeLeft;
+            if (timeLeft === 0 && gameState !== GAME_STATE.SECRET_ENDING) {
+                if (gameState === GAME_STATE.WON) {
+                    if (slicesCollected < 15) endGame();
+                } else {
+                    endGame();
+                }
+            }
+        }
+
+        function endGame() {
+            gameState = GAME_STATE.GAME_OVER;
+            document.getElementById('finalSlices').textContent = slicesCollected;
+            document.getElementById('gameOverScreen').style.display = 'block';
+        }
+
+        function drawSecretEnding() {
+            const secretCanvas = document.getElementById('secretCanvas');
+            const secretCtx = secretCanvas.getContext('2d');
+            secretCanvas.width = canvas.width;
+            secretCanvas.height = canvas.height;
+            secretCtx.fillStyle = '#1a1a1a';
+            secretCtx.fillRect(0, 0, secretCanvas.width, secretCanvas.height);
+            const mikeX = 100, mikeY = 300;
+            secretCtx.fillStyle = '#4CAF50';
+            secretCtx.beginPath();
+            secretCtx.arc(mikeX + 20, mikeY - 30, 20, 0, Math.PI * 2);
+            secretCtx.fill();
+            secretCtx.fillStyle = '#2196F3';
+            secretCtx.fillRect(mikeX + 5, mikeY - 35, 30, 12);
+            secretCtx.fillStyle = '#4CAF50';
+            secretCtx.fillRect(mikeX, mikeY, 40, 50);
+            secretCtx.fillRect(mikeX - 30, mikeY + 10, 30, 8);
+            secretCtx.fillRect(mikeX + 40, mikeY + 10, 30, 8);
+            secretCtx.fillRect(mikeX + 5, mikeY + 50, 8, 30);
+            secretCtx.fillRect(mikeX + 27, mikeY + 50, 8, 30);
+            const shredX = 650, shredY = 250;
+            secretCtx.fillStyle = '#FF0000';
+            secretCtx.fillRect(shredX - 30, shredY - 40, 60, 50);
+            secretCtx.fillStyle = '#CC0000';
+            for (let i = 0; i < 6; i++) {
+                secretCtx.beginPath();
+                secretCtx.moveTo(shredX - 20 + i * 20, shredY - 40);
+                secretCtx.lineTo(shredX - 10 + i * 20, shredY - 60);
+                secretCtx.lineTo(shredX + i * 20, shredY - 40);
+                secretCtx.closePath();
+                secretCtx.fill();
+            }
+            secretCtx.fillStyle = '#333';
+            secretCtx.fillRect(shredX - 25, shredY + 10, 50, 60);
+            const now = Date.now() - gameStartTime;
+            const pizzaProgress = (now % 2000) / 2000;
+            const pizzaX = mikeX + 100 + pizzaProgress * 400;
+            const pizzaY = mikeY - 20 - Math.sin(pizzaProgress * Math.PI) * 150;
+            secretCtx.fillStyle = '#FF6B35';
+            secretCtx.save();
+            secretCtx.translate(pizzaX, pizzaY);
+            secretCtx.rotate(pizzaProgress * Math.PI * 4);
+            secretCtx.beginPath();
+            secretCtx.moveTo(0, 0);
+            secretCtx.lineTo(20, 0);
+            secretCtx.lineTo(10, 20);
+            secretCtx.closePath();
+            secretCtx.fill();
+            secretCtx.restore();
+        }
+
+        function gameLoop() {
+            ctx.fillStyle = 'rgba(135, 206, 235, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (gameState === GAME_STATE.PLAYING) {
+                updatePlayer();
+                updateTimer();
+                checkPizzaCollision();
+                checkEnemyCollision();
+                for (let enemy of enemies) enemy.update();
+            } else if (gameState === GAME_STATE.WON) {
+                updateTimer();
+                updatePlayer();
+                checkPizzaCollision();
+                checkEnemyCollision();
+                for (let enemy of enemies) enemy.update();
+                if (slicesCollected === 15) {
+                    gameState = GAME_STATE.SECRET_ENDING;
+                    document.getElementById('secretScreen').classList.add('active');
+                }
+            } else if (gameState === GAME_STATE.SECRET_ENDING) {
+                drawSecretEnding();
+                requestAnimationFrame(gameLoop);
+                return;
+            }
+
+            for (let slice of pizzaSlices) slice.draw(ctx);
+            for (let enemy of enemies) enemy.draw(ctx);
+            drawPlayer();
+            requestAnimationFrame(gameLoop);
+        }
+
+        document.addEventListener('keydown', (e) => { keys[e.key] = true; });
+        document.addEventListener('keyup', (e) => { keys[e.key] = false; });
+
+        initializePizzaSlices();
+        initializeEnemies();
+        gameLoop();
+    </script>
+</body>
+</html>
